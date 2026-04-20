@@ -1,3 +1,5 @@
+import fallbackPosts from './fallback-posts.json';
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 const TOKEN_KEY = 'sajedar_admin_token';
 const FALLBACK_IMAGE =
@@ -42,6 +44,72 @@ async function request(path, options = {}) {
   return payload;
 }
 
+function publishedFallbackPosts() {
+  return fallbackPosts
+    .filter((post) => post.published)
+    .sort(
+      (a, b) =>
+        new Date(b.publishedAt || b.createdAt) -
+        new Date(a.publishedAt || a.createdAt)
+    );
+}
+
+function matchesSearch(post, query) {
+  if (!query) {
+    return true;
+  }
+
+  const target = [
+    post.title,
+    post.excerpt,
+    post.content,
+    post.category,
+    post.sourceName,
+    ...(post.tags || [])
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  return target.includes(query.toLowerCase());
+}
+
+function fallbackPostList(params = {}) {
+  return publishedFallbackPosts().filter((post) => {
+    const categoryMatches =
+      !params.category ||
+      params.category === 'all' ||
+      post.category.toLowerCase() === params.category.toLowerCase();
+
+    return categoryMatches && matchesSearch(post, params.q || '');
+  });
+}
+
+function fallbackPost(slug) {
+  const post = publishedFallbackPosts().find((item) => item.slug === slug);
+
+  if (!post) {
+    throw new Error('Story not found.');
+  }
+
+  return post;
+}
+
+function fallbackCategories() {
+  return [...new Set(publishedFallbackPosts().map((post) => post.category))];
+}
+
+async function publicRequest(fetcher, fallbackFactory) {
+  try {
+    return await fetcher();
+  } catch (error) {
+    console.warn(
+      'Using bundled Sajedar stories because the live API is unavailable.',
+      error
+    );
+    return fallbackFactory();
+  }
+}
+
 export function imageUrl(url) {
   if (!url) {
     return FALLBACK_IMAGE;
@@ -68,9 +136,21 @@ export function authHeaders() {
 }
 
 export const api = {
-  posts: (params = {}) => request(`/api/posts${toQuery(params)}`),
-  post: (slug) => request(`/api/posts/${slug}`),
-  categories: () => request('/api/categories'),
+  posts: (params = {}) =>
+    publicRequest(
+      () => request(`/api/posts${toQuery(params)}`),
+      () => fallbackPostList(params)
+    ),
+  post: (slug) =>
+    publicRequest(
+      () => request(`/api/posts/${slug}`),
+      () => fallbackPost(slug)
+    ),
+  categories: () =>
+    publicRequest(
+      () => request('/api/categories'),
+      () => fallbackCategories()
+    ),
   login: (payload) =>
     request('/api/admin/login', {
       method: 'POST',
